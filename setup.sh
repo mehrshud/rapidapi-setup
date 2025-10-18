@@ -17,7 +17,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration - CHANGE THESE!
-DOMAIN="your-domain.com"  # YOUR DOMAIN HERE
+DOMAIN="layu.ir"  # YOUR DOMAIN HERE
 ADMIN_EMAIL="admin@${DOMAIN}"  # For SSL cert notifications
 
 # Derived configuration
