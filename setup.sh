@@ -17,7 +17,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration - CHANGE THESE!
-DOMAIN="layu.ir"  # YOUR DOMAIN HERE
+DOMAIN="your-domain.com"  # YOUR DOMAIN HERE
 ADMIN_EMAIL="admin@${DOMAIN}"  # For SSL cert notifications
 
 # Derived configuration
@@ -32,7 +32,6 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
 export UCF_FORCE_CONFFOLD=1
-export DEBIAN_PRIORITY=critical
 
 clear
 echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
@@ -86,36 +85,34 @@ EOF
 # Configure UCF to never prompt
 sudo tee /etc/ucf.conf > /dev/null <<'EOF'
 conf_force_conffold=YES
-conf_force_conffnew=NO
 EOF
 
-# Disable ALL dpkg prompts
-sudo tee /etc/apt/apt.conf.d/50unattended-upgrades-custom > /dev/null <<'EOF'
+# Disable ALL dpkg prompts - ONLY use confold
+sudo tee /etc/apt/apt.conf.d/99local-options > /dev/null <<'EOF'
 Dpkg::Options {
    "--force-confdef";
    "--force-confold";
 };
-APT::Get::Assume-Yes "true";
-APT::Get::allow-downgrades "true";
-APT::Get::allow-remove-essential "false";
-APT::Get::allow-change-held-packages "false";
 EOF
-
-# Disable service restart prompts
-sudo mkdir -p /etc/systemd/system
-echo "DefaultRestartSec=10s" | sudo tee -a /etc/systemd/system.conf > /dev/null
 
 # Pre-configure openssh-server to avoid prompt
 echo 'openssh-server openssh-server/permit-root-login boolean false' | sudo debconf-set-selections
 echo 'openssh-server openssh-server/password-authentication boolean true' | sudo debconf-set-selections
 
 echo -e "${GREEN}[1/15] Updating system packages (fully automated)...${NC}"
-# Use -y and -o flags to force all yes answers and keep old configs
-sudo apt-get update -qq 2>&1 | grep -v "^Get:" || true
+
+# First, fix any broken packages from previous run
+sudo dpkg --configure -a 2>&1 | grep -v "^$" || true
+
+# Update package lists
+sudo apt-get update -qq 2>&1 | grep -v "^Get:\|^Hit:\|^Reading" || true
+
+# Upgrade with proper options - ONLY confold, no confnew
 sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq \
     -o Dpkg::Options::="--force-confdef" \
-    -o Dpkg::Options::="--force-confold" \
-    -o Dpkg::Options::="--force-overwrite" 2>&1 | grep -v "^Reading" || true
+    -o Dpkg::Options::="--force-confold" 2>&1 | grep -v "^Reading\|^Building\|^Get:\|^Fetched" || true
+
+# Clean up
 sudo apt-get autoremove -y -qq 2>&1 | grep -v "^Reading" || true
 
 echo -e "${GREEN}[2/15] Installing core packages...${NC}"
