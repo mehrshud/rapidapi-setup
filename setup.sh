@@ -17,7 +17,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration - CHANGE THESE!
-DOMAIN="layu.ir"  # YOUR DOMAIN HERE
+DOMAIN="your-domain.com"  # YOUR DOMAIN HERE
 ADMIN_EMAIL="admin@${DOMAIN}"  # For SSL cert notifications
 
 # Derived configuration
@@ -27,10 +27,12 @@ REDIS_PASSWORD=$(openssl rand -base64 32)
 API_SECRET=$(openssl rand -hex 32)
 ADMIN_SECRET=$(openssl rand -hex 16)
 
-# Disable interactive prompts
+# Disable ALL interactive prompts
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
+export UCF_FORCE_CONFFOLD=1
+export DEBIAN_PRIORITY=critical
 
 clear
 echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
@@ -70,26 +72,51 @@ run_silent() {
     fi
 }
 
+# Configure system to NEVER show prompts
+echo -e "${GREEN}[0/15] Configuring system for fully non-interactive mode...${NC}"
+
 # Configure needrestart to not prompt
-echo -e "${GREEN}[0/15] Configuring system for non-interactive mode...${NC}"
 sudo mkdir -p /etc/needrestart
 sudo tee /etc/needrestart/needrestart.conf > /dev/null <<'EOF'
+# Restart services automatically
 $nrconf{restart} = 'a';
 $nrconf{kernelhints} = 0;
 EOF
 
-# Disable grub prompts
+# Configure UCF to never prompt
+sudo tee /etc/ucf.conf > /dev/null <<'EOF'
+conf_force_conffold=YES
+conf_force_conffnew=NO
+EOF
+
+# Disable ALL dpkg prompts
 sudo tee /etc/apt/apt.conf.d/50unattended-upgrades-custom > /dev/null <<'EOF'
 Dpkg::Options {
    "--force-confdef";
    "--force-confold";
-}
+};
+APT::Get::Assume-Yes "true";
+APT::Get::allow-downgrades "true";
+APT::Get::allow-remove-essential "false";
+APT::Get::allow-change-held-packages "false";
 EOF
 
-echo -e "${GREEN}[1/15] Updating system packages (non-interactive)...${NC}"
-sudo apt-get update -qq
-sudo apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
-sudo apt-get autoremove -y -qq
+# Disable service restart prompts
+sudo mkdir -p /etc/systemd/system
+echo "DefaultRestartSec=10s" | sudo tee -a /etc/systemd/system.conf > /dev/null
+
+# Pre-configure openssh-server to avoid prompt
+echo 'openssh-server openssh-server/permit-root-login boolean false' | sudo debconf-set-selections
+echo 'openssh-server openssh-server/password-authentication boolean true' | sudo debconf-set-selections
+
+echo -e "${GREEN}[1/15] Updating system packages (fully automated)...${NC}"
+# Use -y and -o flags to force all yes answers and keep old configs
+sudo apt-get update -qq 2>&1 | grep -v "^Get:" || true
+sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    -o Dpkg::Options::="--force-overwrite" 2>&1 | grep -v "^Reading" || true
+sudo apt-get autoremove -y -qq 2>&1 | grep -v "^Reading" || true
 
 echo -e "${GREEN}[2/15] Installing core packages...${NC}"
 sudo apt-get install -y -qq \
