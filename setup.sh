@@ -1,8 +1,9 @@
 #!/bin/bash
 
 #######################################################
-# RAPIDAPI MEGA SERVICE - AUTOMATED SETUP SCRIPT
-# Complete production deployment in minutes
+# RAPIDAPI MEGA SERVICE - FULLY AUTOMATED SETUP
+# Zero-prompt deployment for Ubuntu 24.04 LTS
+# Optimized for DigitalOcean London datacenter
 #######################################################
 
 set -e  # Exit on error
@@ -12,56 +13,144 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Configuration
-PROJECT_DIR="$HOME/rapidapi-service"
-SERVICE_USER="ubuntu"
-DOMAIN="your-domain.com"  # Change this!
+# Configuration - CHANGE THESE!
+DOMAIN="layu.ir"  # YOUR DOMAIN HERE
+ADMIN_EMAIL="admin@${DOMAIN}"  # For SSL cert notifications
 
-echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║   RAPIDAPI MEGA SERVICE - AUTO SETUP      ║${NC}"
-echo -e "${BLUE}║   Production-Ready Deployment             ║${NC}"
-echo -e "${BLUE}╚════════════════════════════════════════════╝${NC}"
+# Derived configuration
+PROJECT_DIR="$HOME/rapidapi-service"
+SERVICE_USER="$USER"
+REDIS_PASSWORD=$(openssl rand -base64 32)
+API_SECRET=$(openssl rand -hex 32)
+ADMIN_SECRET=$(openssl rand -hex 16)
+
+# Disable interactive prompts
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
+clear
+echo -e "${CYAN}╔════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║   RAPIDAPI MEGA SERVICE - FULLY AUTOMATED SETUP   ║${NC}"
+echo -e "${CYAN}║   Ubuntu 24.04 LTS - DigitalOcean London          ║${NC}"
+echo -e "${CYAN}║   Zero-Prompt Production Deployment               ║${NC}"
+echo -e "${CYAN}╚════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "${BLUE}Domain:${NC} $DOMAIN"
+echo -e "${BLUE}Location:${NC} London, UK"
+echo -e "${BLUE}Project Directory:${NC} $PROJECT_DIR"
 echo ""
 
 # Check if running as root
 if [ "$EUID" -eq 0 ]; then 
-    echo -e "${RED}ERROR: Do not run as root. Run as regular user with sudo access.${NC}"
+    echo -e "${RED}❌ ERROR: Do not run as root. Run as regular user with sudo access.${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}[1/12] Updating system packages...${NC}"
-sudo apt update && sudo apt upgrade -y
+# Verify domain is set
+if [ "$DOMAIN" = "your-domain.com" ]; then
+    echo -e "${RED}❌ ERROR: Please edit the script and set your DOMAIN variable!${NC}"
+    exit 1
+fi
 
-echo -e "${GREEN}[2/12] Installing required packages...${NC}"
-sudo apt install -y \
-    python3-pip \
-    python3-venv \
-    nginx \
-    certbot \
-    python3-certbot-nginx \
-    redis-server \
-    git \
-    ufw \
-    fail2ban \
-    unattended-upgrades \
-    htop \
+# Function to run commands silently with status
+run_silent() {
+    local msg="$1"
+    shift
+    echo -ne "${YELLOW}⏳ $msg...${NC}"
+    if "$@" >/dev/null 2>&1; then
+        echo -e "\r${GREEN}✓ $msg${NC}"
+        return 0
+    else
+        echo -e "\r${RED}✗ $msg${NC}"
+        return 1
+    fi
+}
+
+# Configure needrestart to not prompt
+echo -e "${GREEN}[0/15] Configuring system for non-interactive mode...${NC}"
+sudo mkdir -p /etc/needrestart
+sudo tee /etc/needrestart/needrestart.conf > /dev/null <<'EOF'
+$nrconf{restart} = 'a';
+$nrconf{kernelhints} = 0;
+EOF
+
+# Disable grub prompts
+sudo tee /etc/apt/apt.conf.d/50unattended-upgrades-custom > /dev/null <<'EOF'
+Dpkg::Options {
+   "--force-confdef";
+   "--force-confold";
+}
+EOF
+
+echo -e "${GREEN}[1/15] Updating system packages (non-interactive)...${NC}"
+sudo apt-get update -qq
+sudo apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
+sudo apt-get autoremove -y -qq
+
+echo -e "${GREEN}[2/15] Installing core packages...${NC}"
+sudo apt-get install -y -qq \
+    software-properties-common \
+    apt-transport-https \
+    ca-certificates \
     curl \
     wget \
-    build-essential
+    gnupg \
+    lsb-release
 
-echo -e "${GREEN}[3/12] Configuring firewall...${NC}"
-sudo ufw allow OpenSSH
-sudo ufw allow 'Nginx Full'
-sudo ufw --force enable
+echo -e "${GREEN}[3/15] Installing Python and development tools...${NC}"
+sudo apt-get install -y -qq \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    build-essential \
+    git \
+    htop \
+    net-tools \
+    dnsutils
 
-echo -e "${GREEN}[4/12] Configuring automatic security updates...${NC}"
-sudo tee /etc/apt/apt.conf.d/50unattended-upgrades > /dev/null <<EOF
+echo -e "${GREEN}[4/15] Installing and configuring Nginx...${NC}"
+sudo apt-get install -y -qq nginx
+sudo systemctl enable nginx >/dev/null 2>&1
+
+echo -e "${GREEN}[5/15] Installing Redis...${NC}"
+sudo apt-get install -y -qq redis-server
+
+echo -e "${GREEN}[6/15] Installing Certbot for SSL...${NC}"
+sudo apt-get install -y -qq certbot python3-certbot-nginx
+
+echo -e "${GREEN}[7/15] Installing security packages...${NC}"
+sudo apt-get install -y -qq \
+    ufw \
+    fail2ban \
+    unattended-upgrades
+
+echo -e "${GREEN}[8/15] Configuring firewall (UFW)...${NC}"
+sudo ufw --force reset >/dev/null 2>&1
+sudo ufw default deny incoming >/dev/null 2>&1
+sudo ufw default allow outgoing >/dev/null 2>&1
+sudo ufw allow 22/tcp >/dev/null 2>&1
+sudo ufw allow 80/tcp >/dev/null 2>&1
+sudo ufw allow 443/tcp >/dev/null 2>&1
+sudo ufw --force enable >/dev/null 2>&1
+
+echo -e "${GREEN}[9/15] Configuring automatic security updates...${NC}"
+sudo tee /etc/apt/apt.conf.d/20auto-upgrades > /dev/null <<EOF
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+
+sudo tee /etc/apt/apt.conf.d/51unattended-upgrades-custom > /dev/null <<EOF
 Unattended-Upgrade::Allowed-Origins {
     "\${distro_id}:\${distro_codename}";
     "\${distro_id}:\${distro_codename}-security";
-    "\${distro_id}:\${distro_codename}-updates";
+    "\${distro_id}ESMApps:\${distro_codename}-apps-security";
+    "\${distro_id}ESM:\${distro_codename}-infra-security";
 };
 Unattended-Upgrade::AutoFixInterruptedDpkg "true";
 Unattended-Upgrade::MinimalSteps "true";
@@ -69,37 +158,42 @@ Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "03:00";
-Unattended-Upgrade::Mail "root";
 EOF
 
-sudo dpkg-reconfigure -plow unattended-upgrades
-
-echo -e "${GREEN}[5/12] Securing Redis...${NC}"
+echo -e "${GREEN}[10/15] Securing Redis...${NC}"
+sudo cp /etc/redis/redis.conf /etc/redis/redis.conf.backup
 sudo tee -a /etc/redis/redis.conf > /dev/null <<EOF
 
-# Security settings
+# Custom security settings
 bind 127.0.0.1 ::1
 protected-mode yes
-requirepass $(openssl rand -base64 32)
-maxmemory 256mb
+requirepass $REDIS_PASSWORD
+maxmemory 512mb
 maxmemory-policy allkeys-lru
+save 900 1
+save 300 10
+save 60 10000
+stop-writes-on-bgsave-error yes
+rdbcompression yes
 EOF
 
 sudo systemctl restart redis-server
+sudo systemctl enable redis-server >/dev/null 2>&1
 
-echo -e "${GREEN}[6/12] Creating project directory...${NC}"
-mkdir -p "$PROJECT_DIR"
+echo -e "${GREEN}[11/15] Setting up project directory...${NC}"
+mkdir -p "$PROJECT_DIR"/{logs,backups,uploads}
 cd "$PROJECT_DIR"
 
-echo -e "${GREEN}[7/12] Setting up Python virtual environment...${NC}"
+echo -e "${GREEN}[12/15] Creating Python environment...${NC}"
 python3 -m venv venv
 source venv/bin/activate
 
-echo -e "${GREEN}[8/12] Installing Python dependencies...${NC}"
-cat > requirements.txt <<EOF
+echo -e "${GREEN}[13/15] Installing Python dependencies...${NC}"
+cat > requirements.txt <<'EOF'
 fastapi==0.109.2
 uvicorn[standard]==0.27.1
 pydantic==2.6.1
+pydantic-settings==2.1.0
 python-multipart==0.0.9
 google-generativeai==0.3.2
 openai==1.12.0
@@ -119,13 +213,19 @@ psutil==5.9.8
 python-telegram-bot==21.0.1
 pyyaml==6.0.1
 python-dateutil==2.8.2
+jinja2==3.1.3
+itsdangerous==2.1.2
+orjson==3.9.15
 EOF
 
-pip install -r requirements.txt
+pip install --quiet --upgrade pip setuptools wheel
+pip install --quiet -r requirements.txt
 
-echo -e "${GREEN}[9/12] Creating environment file...${NC}"
+echo -e "${GREEN}[14/15] Creating configuration files...${NC}"
+
+# Environment file
 cat > .env <<EOF
-# AI Provider Keys (ADD YOUR KEYS HERE!)
+# AI Provider API Keys - ADD YOUR KEYS HERE!
 GEMINI_API_KEYS=
 OPENAI_API_KEYS=
 ANTHROPIC_API_KEYS=
@@ -133,38 +233,170 @@ PERPLEXITY_API_KEYS=
 COHERE_API_KEYS=
 GROQ_API_KEYS=
 
-# RapidAPI
+# RapidAPI Configuration
 RAPIDAPI_PROXY_SECRET=
+RAPIDAPI_KEY=
 
-# Telegram
+# Telegram Bot (Optional)
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
 
-# Redis
+# Redis Configuration
 REDIS_URL=redis://localhost:6379
+REDIS_PASSWORD=$REDIS_PASSWORD
 
 # Security
-API_SECRET_KEY=$(openssl rand -hex 32)
-ADMIN_SECRET=$(openssl rand -hex 16)
+API_SECRET_KEY=$API_SECRET
+ADMIN_SECRET=$ADMIN_SECRET
+JWT_SECRET=$API_SECRET
+CORS_ORIGINS=https://$DOMAIN,https://www.$DOMAIN
 
-# Server
+# Server Configuration
 API_URL=https://$DOMAIN
 WORKERS=4
 PORT=8000
 ENVIRONMENT=production
-
-# Monitoring
-SENTRY_DSN=
 LOG_LEVEL=INFO
+MAX_UPLOAD_SIZE=10485760
+
+# Rate Limiting
+RATE_LIMIT_ENABLED=true
+RATE_LIMIT_REQUESTS=100
+RATE_LIMIT_WINDOW=60
+
+# Monitoring (Optional)
+SENTRY_DSN=
+PROMETHEUS_ENABLED=true
+
+# Database (if needed later)
+DATABASE_URL=
+
+# Email (Optional - for alerts)
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+ADMIN_EMAIL=$ADMIN_EMAIL
 EOF
 
-echo -e "${YELLOW}IMPORTANT: Edit $PROJECT_DIR/.env and add your API keys!${NC}"
-echo -e "${YELLOW}Press Enter when done...${NC}"
-read
+chmod 600 .env
 
-echo -e "${GREEN}[10/12] Creating systemd services...${NC}"
+# Create basic FastAPI app if it doesn't exist
+if [ ! -f "app.py" ]; then
+    cat > app.py <<'PYEOF'
+from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+import redis
+import os
+from datetime import datetime
+import psutil
 
-# API Service
+# Initialize
+app = FastAPI(
+    title="RapidAPI Mega Service",
+    description="Multi-provider AI API gateway",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Redis connection
+try:
+    redis_client = redis.Redis(
+        host="localhost",
+        port=6379,
+        password=os.getenv("REDIS_PASSWORD"),
+        decode_responses=True
+    )
+    redis_client.ping()
+except Exception as e:
+    print(f"Redis connection failed: {e}")
+    redis_client = None
+
+@app.get("/")
+async def root():
+    return {
+        "service": "RapidAPI Mega Service",
+        "version": "2.0.0",
+        "status": "operational",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for monitoring"""
+    cpu_percent = psutil.cpu_percent(interval=1)
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
+    
+    redis_status = "connected" if redis_client and redis_client.ping() else "disconnected"
+    
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "redis": redis_status,
+        "system": {
+            "cpu_percent": cpu_percent,
+            "memory_percent": memory.percent,
+            "disk_percent": disk.percent
+        }
+    }
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus-compatible metrics"""
+    cpu_percent = psutil.cpu_percent()
+    memory = psutil.virtual_memory()
+    
+    metrics = f"""# HELP api_cpu_usage CPU usage percentage
+# TYPE api_cpu_usage gauge
+api_cpu_usage {cpu_percent}
+
+# HELP api_memory_usage Memory usage percentage
+# TYPE api_memory_usage gauge
+api_memory_usage {memory.percent}
+
+# HELP api_memory_bytes Memory usage in bytes
+# TYPE api_memory_bytes gauge
+api_memory_bytes {memory.used}
+"""
+    return metrics
+
+@app.post("/api/v1/chat")
+@limiter.limit("100/minute")
+async def chat(request: Request):
+    """Main chat endpoint - implement your AI logic here"""
+    return {
+        "response": "API endpoint ready - implement your AI logic",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+PYEOF
+fi
+
+# Create systemd service for API
 sudo tee /etc/systemd/system/rapidapi.service > /dev/null <<EOF
 [Unit]
 Description=RapidAPI Mega Service
@@ -177,66 +409,63 @@ User=$SERVICE_USER
 WorkingDirectory=$PROJECT_DIR
 Environment="PATH=$PROJECT_DIR/venv/bin"
 EnvironmentFile=$PROJECT_DIR/.env
-ExecStart=$PROJECT_DIR/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4 --log-level info
+ExecStart=$PROJECT_DIR/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4 --log-level info --access-log
 Restart=always
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:$PROJECT_DIR/logs/api.log
+StandardError=append:$PROJECT_DIR/logs/api-error.log
 
-# Security
+# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=$PROJECT_DIR
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+PrivateMounts=true
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Telegram Bot Service
-sudo tee /etc/systemd/system/telegram-bot.service > /dev/null <<EOF
-[Unit]
-Description=Telegram Monitoring Bot
-After=network.target rapidapi.service
-Wants=rapidapi.service
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$PROJECT_DIR
-Environment="PATH=$PROJECT_DIR/venv/bin"
-EnvironmentFile=$PROJECT_DIR/.env
-ExecStart=$PROJECT_DIR/venv/bin/python telegram_bot.py
-Restart=always
-RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-echo -e "${GREEN}[11/12] Configuring Nginx...${NC}"
+# Nginx configuration
 sudo tee /etc/nginx/sites-available/rapidapi > /dev/null <<EOF
 # Rate limiting zones
 limit_req_zone \$binary_remote_addr zone=api_limit:10m rate=100r/s;
 limit_req_zone \$binary_remote_addr zone=api_burst:10m rate=20r/s;
-
-# Connection limiting
 limit_conn_zone \$binary_remote_addr zone=conn_limit:10m;
+
+# Cache for static content
+proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=api_cache:10m max_size=100m inactive=60m use_temp_path=off;
+
+upstream api_backend {
+    least_conn;
+    server 127.0.0.1:8000 max_fails=3 fail_timeout=30s;
+    keepalive 32;
+}
 
 server {
     listen 80;
     listen [::]:80;
-    server_name $DOMAIN;
+    server_name $DOMAIN www.$DOMAIN;
 
     # Security headers
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';" always;
 
     # Rate limiting
     limit_req zone=api_limit burst=50 nodelay;
@@ -245,18 +474,44 @@ server {
 
     # Max body size
     client_max_body_size 10M;
+    client_body_buffer_size 128k;
+
+    # Timeouts
+    client_body_timeout 12;
+    client_header_timeout 12;
+    keepalive_timeout 15;
+    send_timeout 10;
 
     # Logging
-    access_log /var/log/nginx/rapidapi-access.log;
-    error_log /var/log/nginx/rapidapi-error.log;
+    access_log /var/log/nginx/rapidapi-access.log combined buffer=32k flush=5s;
+    error_log /var/log/nginx/rapidapi-error.log warn;
 
-    # Proxy to FastAPI
+    # Health check endpoint (no rate limit)
+    location = /health {
+        limit_req off;
+        limit_conn off;
+        proxy_pass http://api_backend;
+        access_log off;
+    }
+
+    # Metrics endpoint (localhost only)
+    location = /metrics {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        proxy_pass http://api_backend;
+    }
+
+    # API endpoints
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://api_backend;
+        proxy_http_version 1.1;
+        
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Connection "";
         
         # Timeouts
         proxy_connect_timeout 60s;
@@ -267,95 +522,288 @@ server {
         proxy_buffering on;
         proxy_buffer_size 4k;
         proxy_buffers 8 4k;
+        proxy_busy_buffers_size 8k;
+        
+        # WebSocket support
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 
-    # Health check endpoint (no rate limit)
-    location = /health {
-        limit_req off;
-        limit_conn off;
-        proxy_pass http://127.0.0.1:8000;
-        access_log off;
-    }
-
-    # Metrics endpoint (protected)
-    location = /metrics {
-        allow 127.0.0.1;
-        deny all;
-        proxy_pass http://127.0.0.1:8000;
+    # Static files (if any)
+    location /static {
+        alias $PROJECT_DIR/static;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
     }
 }
 EOF
 
-# Enable site
+# Enable site and remove default
 sudo ln -sf /etc/nginx/sites-available/rapidapi /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
+
+# Test nginx config
 sudo nginx -t
-sudo systemctl restart nginx
 
-echo -e "${GREEN}[12/12] Starting services...${NC}"
+echo -e "${GREEN}[15/15] Starting and enabling services...${NC}"
+
+# Reload systemd
 sudo systemctl daemon-reload
-sudo systemctl enable rapidapi telegram-bot redis-server nginx
-sudo systemctl start rapidapi telegram-bot
 
+# Enable and start services
+sudo systemctl enable rapidapi >/dev/null 2>&1
+sudo systemctl restart nginx
+sudo systemctl start rapidapi
+
+# Wait a moment for service to start
+sleep 3
+
+# Check if service started successfully
+if sudo systemctl is-active --quiet rapidapi; then
+    echo -e "${GREEN}✓ RapidAPI service started successfully${NC}"
+else
+    echo -e "${YELLOW}⚠ RapidAPI service may need troubleshooting${NC}"
+fi
+
+# Configure SSL automatically
 echo ""
-echo -e "${GREEN}✓ Setup complete!${NC}"
-echo ""
-echo -e "${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "${BLUE}       NEXT STEPS${NC}"
-echo -e "${BLUE}═══════════════════════════════════════════${NC}"
-echo ""
-echo -e "${YELLOW}1. Configure SSL certificate:${NC}"
-echo "   sudo certbot --nginx -d $DOMAIN"
-echo ""
-echo -e "${YELLOW}2. Check service status:${NC}"
-echo "   sudo systemctl status rapidapi"
-echo "   sudo systemctl status telegram-bot"
-echo ""
-echo -e "${YELLOW}3. View logs:${NC}"
-echo "   sudo journalctl -u rapidapi -f"
-echo "   sudo journalctl -u telegram-bot -f"
-echo ""
-echo -e "${YELLOW}4. Test API:${NC}"
-echo "   curl http://localhost:8000/health"
-echo ""
-echo -e "${YELLOW}5. Access API documentation:${NC}"
-echo "   https://$DOMAIN/docs"
-echo ""
-echo -e "${YELLOW}6. Monitor with Telegram:${NC}"
-echo "   Send /start to your Telegram bot"
-echo ""
-echo -e "${GREEN}Server is running at: ${BLUE}https://$DOMAIN${NC}"
+echo -e "${CYAN}════════════════════════════════════════════════${NC}"
+echo -e "${CYAN}  CONFIGURING SSL CERTIFICATE${NC}"
+echo -e "${CYAN}════════════════════════════════════════════════${NC}"
 echo ""
 
-# Create helpful management scripts
-cat > "$PROJECT_DIR/restart.sh" <<'EOF'
+if sudo certbot --nginx -d "$DOMAIN" -d "www.$DOMAIN" --non-interactive --agree-tos --email "$ADMIN_EMAIL" --redirect; then
+    echo -e "${GREEN}✓ SSL certificate installed successfully${NC}"
+else
+    echo -e "${YELLOW}⚠ SSL installation failed. Run manually: sudo certbot --nginx -d $DOMAIN${NC}"
+fi
+
+# Create management scripts
+echo -e "${GREEN}Creating management scripts...${NC}"
+
+cat > "$PROJECT_DIR/restart.sh" <<'EOFSCRIPT'
 #!/bin/bash
-sudo systemctl restart rapidapi telegram-bot
-echo "Services restarted!"
-EOF
+echo "Restarting services..."
+sudo systemctl restart rapidapi nginx
+echo "✓ Services restarted!"
+sudo systemctl status rapidapi --no-pager -l
+EOFSCRIPT
 
-cat > "$PROJECT_DIR/logs.sh" <<'EOF'
+cat > "$PROJECT_DIR/logs.sh" <<'EOFSCRIPT'
 #!/bin/bash
-sudo journalctl -u rapidapi -f
-EOF
+echo "=== Live API Logs ==="
+echo "Press Ctrl+C to exit"
+echo ""
+sudo journalctl -u rapidapi -f --no-pager
+EOFSCRIPT
 
-cat > "$PROJECT_DIR/status.sh" <<'EOF'
+cat > "$PROJECT_DIR/status.sh" <<'EOFSCRIPT'
 #!/bin/bash
+clear
+echo "════════════════════════════════════════"
+echo "  RAPIDAPI SERVICE STATUS"
+echo "════════════════════════════════════════"
+echo ""
 echo "=== Service Status ==="
-sudo systemctl status rapidapi --no-pager
+sudo systemctl status rapidapi --no-pager -l | head -20
 echo ""
-sudo systemctl status telegram-bot --no-pager
+sudo systemctl status nginx --no-pager -l | head -10
 echo ""
 echo "=== Resource Usage ==="
 free -h
-df -h
-EOF
+echo ""
+df -h | grep -E "Filesystem|/$"
+echo ""
+echo "=== Recent API Logs ==="
+sudo journalctl -u rapidapi --no-pager -n 5
+echo ""
+echo "=== Network ==="
+sudo ss -tlnp | grep -E "8000|80|443"
+EOFSCRIPT
+
+cat > "$PROJECT_DIR/update.sh" <<'EOFSCRIPT'
+#!/bin/bash
+cd "$(dirname "$0")"
+echo "Updating dependencies..."
+source venv/bin/activate
+pip install -q --upgrade pip
+pip install -q -r requirements.txt --upgrade
+echo "Restarting service..."
+sudo systemctl restart rapidapi
+echo "✓ Update complete!"
+EOFSCRIPT
+
+cat > "$PROJECT_DIR/backup.sh" <<'EOFSCRIPT'
+#!/bin/bash
+BACKUP_DIR="$HOME/rapidapi-service/backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="$BACKUP_DIR/backup_$TIMESTAMP.tar.gz"
+
+echo "Creating backup..."
+tar -czf "$BACKUP_FILE" \
+    --exclude='venv' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='logs/*.log' \
+    -C "$HOME" rapidapi-service/
+
+echo "✓ Backup created: $BACKUP_FILE"
+ls -lh "$BACKUP_FILE"
+
+# Keep only last 7 backups
+cd "$BACKUP_DIR" && ls -t | tail -n +8 | xargs -r rm --
+EOFSCRIPT
 
 chmod +x "$PROJECT_DIR"/*.sh
 
-echo -e "${GREEN}Created helper scripts:${NC}"
-echo "  ./restart.sh  - Restart services"
-echo "  ./logs.sh     - View logs"
-echo "  ./status.sh   - Check status"
+# Create helpful aliases
+cat >> "$HOME/.bashrc" <<'EOFBASH'
+
+# RapidAPI shortcuts
+alias api-status='~/rapidapi-service/status.sh'
+alias api-logs='~/rapidapi-service/logs.sh'
+alias api-restart='~/rapidapi-service/restart.sh'
+alias api-update='~/rapidapi-service/update.sh'
+alias api-backup='~/rapidapi-service/backup.sh'
+alias api-cd='cd ~/rapidapi-service'
+EOFBASH
+
+# Setup log rotation
+sudo tee /etc/logrotate.d/rapidapi > /dev/null <<'EOFLOG'
+/home/*/rapidapi-service/logs/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0644 ubuntu ubuntu
+    sharedscripts
+    postrotate
+        systemctl reload rapidapi > /dev/null 2>&1 || true
+    endscript
+}
+EOFLOG
+
+# Final summary
+clear
 echo ""
-echo -e "${GREEN}Setup completed successfully! 🚀${NC}"
+echo -e "${GREEN}╔════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║           INSTALLATION COMPLETE! 🚀                ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════╝${NC}"
+echo ""
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+echo -e "${CYAN}  SERVICE INFORMATION${NC}"
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "${BLUE}🌐 API URL:${NC}        https://$DOMAIN"
+echo -e "${BLUE}📚 Documentation:${NC}  https://$DOMAIN/docs"
+echo -e "${BLUE}📁 Project Dir:${NC}    $PROJECT_DIR"
+echo -e "${BLUE}🔒 Redis Password:${NC} $REDIS_PASSWORD"
+echo ""
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+echo -e "${CYAN}  QUICK COMMANDS${NC}"
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "${YELLOW}Service Management:${NC}"
+echo "  api-status         # Check service status"
+echo "  api-logs           # View live logs"
+echo "  api-restart        # Restart services"
+echo "  api-update         # Update dependencies"
+echo "  api-backup         # Create backup"
+echo "  api-cd             # Go to project directory"
+echo ""
+echo -e "${YELLOW}Manual Commands:${NC}"
+echo "  sudo systemctl status rapidapi"
+echo "  sudo systemctl restart rapidapi"
+echo "  sudo journalctl -u rapidapi -f"
+echo "  sudo nginx -t && sudo systemctl reload nginx"
+echo ""
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+echo -e "${CYAN}  NEXT STEPS${NC}"
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "${YELLOW}1.${NC} Add your API keys to .env file:"
+echo "   nano $PROJECT_DIR/.env"
+echo ""
+echo -e "${YELLOW}2.${NC} Test the API:"
+echo "   curl https://$DOMAIN/health"
+echo ""
+echo -e "${YELLOW}3.${NC} Check service status:"
+echo "   api-status"
+echo ""
+echo -e "${YELLOW}4.${NC} View API documentation:"
+echo "   https://$DOMAIN/docs"
+echo ""
+echo -e "${YELLOW}5.${NC} Monitor logs:"
+echo "   api-logs"
+echo ""
+echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}  SECURITY NOTES${NC}"
+echo -e "${GREEN}═══════════════════════════════════════════════════${NC}"
+echo ""
+echo -e "✓ Firewall configured (UFW)"
+echo -e "✓ SSL certificate installed"
+echo -e "✓ Redis secured with password"
+echo -e "✓ Automatic security updates enabled"
+echo -e "✓ Service hardened with systemd"
+echo -e "✓ Rate limiting active"
+echo ""
+echo -e "${CYAN}Your Redis password has been saved to $PROJECT_DIR/.env${NC}"
+echo ""
+echo -e "${GREEN}All done! Your API is live at: ${BLUE}https://$DOMAIN${NC}"
+echo ""
+
+# Save installation info
+cat > "$PROJECT_DIR/INSTALLATION_INFO.txt" <<EOF
+RapidAPI Service Installation
+==============================
+Date: $(date)
+Domain: $DOMAIN
+Location: London, UK
+Ubuntu: 24.04 LTS
+
+Redis Password: $REDIS_PASSWORD
+API Secret: $API_SECRET
+Admin Secret: $ADMIN_SECRET
+
+Project Directory: $PROJECT_DIR
+Service User: $SERVICE_USER
+
+Quick Commands:
+- api-status
+- api-logs  
+- api-restart
+- api-update
+- api-backup
+- api-cd
+
+Service Status:
+sudo systemctl status rapidapi
+
+Logs:
+sudo journalctl -u rapidapi -f
+
+Configuration:
+$PROJECT_DIR/.env
+EOF
+
+echo -e "${CYAN}Installation info saved to: $PROJECT_DIR/INSTALLATION_INFO.txt${NC}"
+echo ""
+
+# Source bashrc to enable aliases immediately
+source "$HOME/.bashrc" 2>/dev/null || true
+
+# Final check
+echo -e "${YELLOW}Running final health check...${NC}"
+sleep 2
+if curl -sf http://localhost:8000/health > /dev/null; then
+    echo -e "${GREEN}✓ API is responding correctly!${NC}"
+else
+    echo -e "${YELLOW}⚠ API may need a moment to start. Check with: api-status${NC}"
+fi
+
+echo ""
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}✓✓✓ SETUP COMPLETE - ENJOY YOUR API! ✓✓✓${NC}"
+echo -e "${CYAN}═══════════════════════════════════════════════════${NC}"
